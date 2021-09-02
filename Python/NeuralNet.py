@@ -17,7 +17,11 @@ X /= np.amax(X, axis=0)
 y /= 100
 
 class Neural_Network(object):
-    def __init__(self, layerSizes, Lambda):
+    def __init__(self, layerSizes, Lambda, input):
+        # Adding a column of ones to the input to act as the bias term;
+        # incorporating the bias into the weight matricies allows the term to be tuned in training.
+        self.input = np.hstack(((np.ones((input.shape[0], 1))), input))
+
         # Defines a term to limit the model overfitting the data
         self.Lambda = Lambda
 
@@ -27,53 +31,55 @@ class Neural_Network(object):
         # Creates an array of matricies, one less weight matrix than layers
         self.W = [0] * (len(self.layerSizes) - 1)
 
-        # Iterates through the array and initializes the weights to random weights
-        for i in range(len(self.W)):
-            self.W[i] = np.random.randn(self.layerSizes[i],self.layerSizes[i + 1])
+        # Iterates through the array and initializes the weights to random weights and biases to random biases
+        for i in range(len(self.W) - 1):
+            self.W[i] = np.random.randn(self.layerSizes[i] + 1, self.layerSizes[i + 1] + 1)
+            self.W[i][::, 0] = 1
+        self.W[-1] = np.random.randn(self.layerSizes[-2] + 1, self.layerSizes[-1])
         
-    def forward(self, X):
+    def forward(self):
         # Creates the variables 'z' and 'a' to hold the data as 'X' is passed through the matricies
         self.z = [0] * len(self.layerSizes)
         self.a = [0] * len(self.layerSizes)
 
         # Initializes the first variable for 'z' and 'a' to be the input
-        self.z[0] = X
-        self.a[0] = X
+        self.z[0] = self.input
+        self.a[0] = self.input
 
         # Propogates the inputs through the network
         for i in range(1, len(self.layerSizes)):
             self.z[i] = np.matmul(self.a[i - 1], self.W[i - 1])
             self.a[i] = self.sigmoid(self.z[i])
-
-        yHat = self.a[len(self.a) - 1]
-
+            if(i < len(self.layerSizes) - 2):
+                self.a[i][0, ::] = 1
+        
         # Returns the result of feeding the input through the matrix operations
-        return yHat
+        return self.a[-1]
+
         
     def sigmoid(self, z):
         # Applies the sigmoid activation function to scalar, vector, or matrix
-        # Maps any input down to between 0 and 1. {(-inf, inf) -> (0, 1)}
-        return 1/(1+np.exp(-z))
+        # Maps any input down to between 0 and 1. {(-inf, inf) => [0, 1]}
+        return 1.0 / (1.0 + np.exp(-z))
     
     def sigmoidPrime(self, z):
         # Derivative of the sigmoid function
-        return np.exp(-z)/((1+np.exp(-z))**2)
+        return 1.0 / (2 + np.exp(z) + np.exp(-z))
     
-    def costFunction(self, X, y):
+    def costFunction(self, y):
         # Computes the cost for given X and y, weights stored in class are used
-        self.yHat = self.forward(X)
+        self.yHat = self.forward()
 
         # Sums the squares of the weight matricies and applies to cost to reduce overfitting
         sumWeights = 0
         for i in range(len(self.W)):
             sumWeights += np.sum((self.W[i]**2))
-
-        J = 0.5 * sum((y - self.yHat)**2) / X.shape[0] + (self.Lambda / 2) * sumWeights
-        return J
         
-    def costFunctionPrime(self, X, y):
+        return 0.5 * sum((y - self.yHat)**2) / self.input.shape[0] + (self.Lambda / 2) * sumWeights
+        
+    def costFunctionPrime(self, y):
         # Computes the derivatives of the cost with respect to the weights for given X and y
-        self.yHat = self.forward(X)
+        self.yHat = self.forward()
 
         # Creates arrays 'delta' and 'dJdW' to find how much
         # the weights need to change to converge to a solution
@@ -82,14 +88,14 @@ class Neural_Network(object):
         
         # Last element is the derivative with respect to yHat mulitplied by the derivative of the
         # activation function of 'z' right after being passed from the last weight matrix
-        delta[len(delta) - 1] = np.multiply(-(y-self.yHat), self.sigmoidPrime(self.z[len(self.z) - 1]))
-        dJdW[len(dJdW) - 1] = np.dot(self.a[len(self.a) - 2].T, delta[len(delta) - 1]) + (self.Lambda * self.W[len(self.W) - 1])
+        delta[-1] = np.multiply(self.yHat - y, self.sigmoidPrime(self.z[-1]))
+        dJdW[-1] = np.dot(self.a[-2].T, delta[-1]) + (self.Lambda * self.W[-1])
 
         # From the second to last element, derivative of the previous weights
         # is calculated using the previous 'delta' and weight multiplied by
         # the derivative of the activation function of the previous 'z'
         for i in reversed(range(len(dJdW) - 1)):
-            delta[i] = np.dot(delta[i + 1], self.W[i + 1].T)*self.sigmoidPrime(self.z[i + 1])
+            delta[i] = np.dot(delta[i + 1], self.W[i + 1].T) * self.sigmoidPrime(self.z[i + 1])
             dJdW[i] = np.dot(self.z[i].T, delta[i]) + (self.Lambda * self.W[i])
         
         # Returns the derivative with respect to the weights
@@ -110,14 +116,17 @@ class Neural_Network(object):
         # Has an input 'params' that resets all of the weight values in a vector format
         # Creates 'start' and 'end' to retrieve the correct indices to change the weights
         start = 0
-        for i in range(len(self.W)):
-            end = start + (self.layerSizes[i + 1] * self.layerSizes[i])
-            self.W[i] = np.reshape(params[start:end], (self.layerSizes[i] , self.layerSizes[i + 1]))
+        for i in range(len(self.W) - 1):
+            end = start + ((self.layerSizes[i] + 1) * (self.layerSizes[i + 1] + 1))
+            self.W[i] = np.reshape(params[start:end], (self.layerSizes[i] + 1, self.layerSizes[i + 1] + 1))
+            self.W[i][::,0] = 1
             start = end
+        end = start + ((self.layerSizes[-2] + 1) * self.layerSizes[-1])
+        self.W[-1] = np.reshape(params[start: end], (self.layerSizes[-2] + 1, self.layerSizes[-1]))
         
-    def computeGradients(self, X, y):
+    def computeGradients(self, y):
         # Retrieves the changes in weights
-        dJdW = self.costFunctionPrime(X, y)
+        dJdW = self.costFunctionPrime(y)
 
         # Turns first change in weight into vector
         params = dJdW[0].ravel()
@@ -165,16 +174,15 @@ class trainer(object):
         
     def callbackF(self, params):
         self.N.setParams(params)
-        self.J.append(self.N.costFunction(self.X, self.y))   
+        self.J.append(self.N.costFunction(self.y))   
         
-    def costFunctionWrapper(self, params, X, y):
+    def costFunctionWrapper(self, params, y):
         self.N.setParams(params)
-        cost = self.N.costFunction(X, y)
-        grad = self.N.computeGradients(X,y)
+        cost = self.N.costFunction(y)
+        grad = self.N.computeGradients(y)
         return cost, grad
         
-    def train(self, X, y):
-        self.X = X
+    def train(self, y):
         self.y = y
 
         self.J = []
@@ -182,9 +190,9 @@ class trainer(object):
         params0 = self.N.getParams()
         print('init params\n', params0)
 
-        options = {'maxiter': 200, 'disp' : True}
+        options = {'maxiter': 500, 'disp' : True}
         _res = optimize.minimize(self.costFunctionWrapper, params0, jac=True, method='BFGS', \
-                                 args=(X, y), options=options, callback=self.callbackF)
+                                 args=(y), options=options, callback=self.callbackF)
 
         self.N.setParams(_res.x)
         self.optimizationResults = _res
@@ -193,14 +201,7 @@ class trainer(object):
 
 layers = [2, 3, 1]
 errorCorrectingTerm = 0
-NN = Neural_Network(layers, errorCorrectingTerm)
+NN = Neural_Network(layers, errorCorrectingTerm, X)
 T = trainer(NN)
-T.train(X,y)
-print(NN.forward(X))
-
-# numgrad = computeNumericalGradient(NN, X, y)
-# grad = NN.computeGradients(X, y)
-
-# diffNorm = np.linalg.norm(grad - numgrad) / np.linalg.norm(grad + numgrad)
-
-# print(diffNorm)
+T.train(y)
+print(NN.forward())
